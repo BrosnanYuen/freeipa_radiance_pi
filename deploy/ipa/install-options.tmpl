@@ -1,0 +1,11 @@
+# Install options consumed by the freeipa-container image on first start.
+# The image reads /data/ipa-server-install-options and passes these lines to
+# ipa-server-install. scripts/up.sh renders this file with 0600 and shreds it
+# after the realm is installed. Do not commit a rendered copy.
+-U
+--realm={{REALM}}
+--domain={{DOMAIN}}
+--no-ntp
+--skip-mem-check
+--admin-password={{ADMIN_PASSWORD}}
+--ds-password={{DM_PASSWORD}}

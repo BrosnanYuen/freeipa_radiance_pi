@@ -1,0 +1,11 @@
+ARG TESTS_BASE_IMAGE=python:3.13-slim
+FROM ${TESTS_BASE_IMAGE}
+
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+
+COPY app.py /app/app.py
+RUN chmod 0644 /app/app.py
+USER 65534:65534
+
+EXPOSE 8000
+CMD ["python3", "/app/app.py", "--listen", "127.0.0.1:8000"]

@@ -1,0 +1,25 @@
+# Runtime state and secrets — never committed.
+/secrets/
+/run/
+/work/*
+!/work/.gitkeep
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.egg-info/
+
+# Node
+node_modules/
+
+# Local reports
+/reports/
+coverage.xml
+.shellcheckrc.local
+
+# Editor/OS noise
+.DS_Store
+*.swp

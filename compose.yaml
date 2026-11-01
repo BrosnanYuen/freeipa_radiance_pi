@@ -1,0 +1,372 @@
+name: radiance-krb
+
+# Kerberos-authenticated radiance for the Pi harness.
+# See PLAN.md §5 and docs/RUNBOOK.md. Every image is pinned by digest in .env.
+
+networks:
+  krb-net:
+    driver: bridge
+  shim-net:
+    driver: bridge
+    internal: true
+
+secrets:
+  ipa_admin_password:
+    file: ./secrets/ipa_admin_password
+  pi_password:
+    file: ./secrets/pi_password
+  mallory_password:
+    file: ./secrets/mallory_password
+  ldap_bind_password:
+    file: ./secrets/ldap_bind_password
+
+services:
+  ipa:
+    image: ${FREEIPA_IMAGE:?pin a FreeIPA image digest in .env}
+    hostname: ipa.ipa.test
+    read_only: true
+    restart: unless-stopped
+    # systemd needs the host cgroup namespace on a cgroup-v2 host (upstream
+    # README); without these the container exits during boot. Not privileged.
+    cgroup: host
+    # Do NOT set init: true — systemd must be PID 1. The image sets STOPSIGNAL SIGRTMIN+3.
+    volumes:
+      - ./run/ipa-data:/data:Z
+      - ./deploy/ipa:/bootstrap:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:88:88/tcp"
+      - "${BIND_ADDR:-127.0.0.1}:88:88/udp"
+      - "${BIND_ADDR:-127.0.0.1}:464:464/tcp"
+      - "${BIND_ADDR:-127.0.0.1}:464:464/udp"
+    networks:
+      krb-net:
+        aliases:
+          - ipa.ipa.test
+    healthcheck:
+      test: ["CMD-SHELL", "ipactl status >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 80
+      start_period: 15m
+
+  # One-off bootstrap: shares the IPA network namespace, mounts /data and the
+  # bootstrap secrets, writes users/service/keytab/cert, then exits. The
+  # long-lived ipa service never mounts these secrets.
+  bootstrap:
+    image: ${FREEIPA_IMAGE:?pin a FreeIPA image digest in .env}
+    profiles: ["bootstrap"]
+    network_mode: "service:ipa"
+    depends_on:
+      ipa:
+        condition: service_healthy
+    read_only: true
+    volumes:
+      - ./run/ipa-data:/data
+      - ./deploy/ipa:/bootstrap:ro
+      - ./run/krb5.conf:/etc/krb5.conf:ro
+      # Copied from the running IPA container by scripts/copy-ipa-client-config.sh
+      # before this one-off starts. ca.crt is needed for TLS verification by the
+      # ipa CLI; default.conf tells the CLI which server/realm to use.
+      - ./run/ipa-client/ca.crt:/etc/ipa/ca.crt:ro
+      - ./run/ipa-client/ipa-default.conf:/etc/ipa/default.conf:ro
+    secrets:
+      - ipa_admin_password
+      - pi_password
+      - mallory_password
+      - ldap_bind_password
+    entrypoint: ["/bin/bash", "/bootstrap/bootstrap.sh"]
+    environment:
+      HOME: /tmp
+      KRB5_CONFIG: /etc/krb5.conf
+      KRB5CCNAME: FILE:/tmp/krb5cc_bootstrap
+    # Compose secrets live under /run/secrets, so /run must NOT be a tmpfs here.
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    cap_add: [DAC_OVERRIDE, CHOWN, FOWNER]
+    security_opt: ["no-new-privileges:true"]
+
+  radiance-edge:
+    image: radiance-krb-edge:local
+    build:
+      context: deploy/edge
+      args:
+        EDGE_BASE_IMAGE: ${EDGE_BASE_IMAGE:?set EDGE_BASE_IMAGE in .env}
+    hostname: radiance.ipa.test
+    restart: unless-stopped
+    depends_on:
+      ipa:
+        condition: service_healthy
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:8443:8443"
+    volumes:
+      - ./run/ipa-data/keytabs:/keytabs:ro
+      - ./run/ipa-data/certs:/certs:ro
+      - ./run/krb5.conf:/etc/krb5.conf:ro
+      - ./secrets/ldap_bind_password:/secrets-src/ldap_bind_password:ro
+      - ./secrets/radiance_api_key:/secrets-src/radiance_api_key:ro
+    networks:
+      krb-net:
+        aliases:
+          - radiance.ipa.test
+    environment:
+      # Apache workers run as www-data; the default replay-cache directory
+      # /var/tmp is read-only in this container.
+      KRB5RCACHEDIR: /tmp
+      # OpenLDAP reads these even when mod_ldap's LDAPTrustedGlobalCert is set;
+      # without them the Debian client fell back to the system CA bundle and
+      # every LDAPS/StartTLS bind failed.
+      LDAPTLS_CACERT: /run/radiance/ca.crt
+      LDAPTLS_REQCERT: demand
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, SETGID, SETUID, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/run, /tmp, /var/lock]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8081/healthz >/dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 120
+      start_period: 10m
+
+  # Real engine. Shares the edge's network namespace and loopback; publishes
+  # nothing. gpu and test-fast are mutually exclusive.
+  radiance:
+    image: ${RADIANCE_IMAGE:?pin a radiance image digest in .env}
+    profiles: ["gpu"]
+    network_mode: "service:radiance-edge"
+    depends_on:
+      radiance-edge:
+        condition: service_healthy
+    init: true
+    user: "${RADIANCE_UID:?set RADIANCE_UID in .env}:${RADIANCE_GID:?set RADIANCE_GID in .env}"
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${RENDER_GID:?set RENDER_GID in .env}"
+      - "${VIDEO_GID:?set VIDEO_GID in .env}"
+    volumes:
+      - ${RADIANCE_MODELS:?set RADIANCE_MODELS in .env}:/models:ro
+      - ./deploy/radiance/entrypoint.sh:/entrypoint.sh:ro
+      - ./secrets/radiance_api_key:/secrets-src/radiance_api_key:ro
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${RADIANCE_SECCOMP:?set RADIANCE_SECCOMP in .env}
+    cap_drop: [ALL]
+    ulimits:
+      memlock: -1
+    read_only: true
+    tmpfs: [/tmp]
+    stop_grace_period: 60s
+    command:
+      - --model
+      - /models/${RADIANCE_MODEL_FILE:-qwen3.8-27b-mxfp4.rad}
+      - --host
+      - 127.0.0.1
+      - --port
+      - "8000"
+      - --api-key-env
+      - RADIANCE_API_KEY
+      - --served-model-name
+      - ${RADIANCE_SERVED_NAME:-qwen3.8-27b}
+      - --tp
+      - "1"
+      - --max-model-len
+      - "${RADIANCE_CONTEXT_WINDOW:-200000}"
+      - --kv-cache-dtype
+      - fp8
+      - --max-num-seqs
+      - "1"
+      - --max-num-batched-tokens
+      - "2048"
+      - --num-speculative-tokens
+      - "0"
+      - --mm-max-patches
+      - "0"
+      - --no-cors
+    healthcheck:
+      test: ["CMD", "busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15m
+
+  # OpenAI-compatible stub sharing the edge namespace. Requires no GPU.
+  mock-radiance:
+    image: radiance-krb-mock:local
+    build:
+      context: tests/mock
+      args:
+        TESTS_BASE_IMAGE: ${TESTS_BASE_IMAGE:?set TESTS_BASE_IMAGE in .env}
+    profiles: ["test-fast"]
+    network_mode: "service:radiance-edge"
+    depends_on:
+      radiance-edge:
+        condition: service_healthy
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  # One-off kinit/klist container. One of only two services that mount the ccache.
+  pi-login:
+    image: radiance-krb-pi:local
+    build:
+      context: deploy/pi
+      args:
+        PI_BASE_IMAGE: ${PI_BASE_IMAGE:?set PI_BASE_IMAGE in .env}
+        PI_VERSION: ${PI_VERSION:?set PI_VERSION in .env}
+        PI_INTEGRITY: ${PI_INTEGRITY:?set PI_INTEGRITY in .env}
+    profiles: ["client"]
+    user: "${PI_UID:-1000}:${PI_GID:-1000}"
+    depends_on:
+      ipa:
+        condition: service_healthy
+    volumes:
+      - ./run/ccache:/creds
+      - ./run/krb5.conf:/etc/krb5.conf:ro
+    environment:
+      HOME: /tmp
+      KRB5CCNAME: FILE:/creds/krb5cc
+      KRB5_CONFIG: /etc/krb5.conf
+    networks: [krb-net]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
+    stdin_open: true
+    tty: true
+    command: ["sleep", "infinity"]
+
+  # Credential agent. Holds the ccache; the agent container holds only the
+  # bearer token this service issues.
+  radiance-shim:
+    image: radiance-krb-pi:local
+    build:
+      context: deploy/pi
+      args:
+        PI_BASE_IMAGE: ${PI_BASE_IMAGE:?set PI_BASE_IMAGE in .env}
+        PI_VERSION: ${PI_VERSION:?set PI_VERSION in .env}
+        PI_INTEGRITY: ${PI_INTEGRITY:?set PI_INTEGRITY in .env}
+    profiles: ["client"]
+    user: "${PI_UID:-1000}:${PI_GID:-1000}"
+    depends_on:
+      radiance-edge:
+        condition: service_healthy
+    volumes:
+      - ./run/ccache:/creds
+      - ./run/pi-agent:/agent
+      - ./run/krb5.conf:/etc/krb5.conf:ro
+      - ./run/ipa-data/certs/ca.crt:/certs/ca.crt:ro
+    environment:
+      HOME: /tmp
+      KRB5CCNAME: FILE:/creds/krb5cc
+      KRB5_CONFIG: /etc/krb5.conf
+    networks: [krb-net, shim-net]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
+    command:
+      - radiance-krb-shim
+      - --listen
+      - 0.0.0.0:8088
+      - --edge
+      - https://radiance.ipa.test:8443
+      - --service
+      - HTTP/radiance.ipa.test
+      - --ca
+      - /certs/ca.crt
+      - --token-file
+      - /agent/shim-token
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8088/healthz >/dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 1m
+
+  # The agent. No ccache, no certs, no secrets, no IPA data; only work/ and
+  # its own agent directory. It can reach only the shim.
+  pi-client:
+    image: radiance-krb-pi:local
+    build:
+      context: deploy/pi
+      args:
+        PI_BASE_IMAGE: ${PI_BASE_IMAGE:?set PI_BASE_IMAGE in .env}
+        PI_VERSION: ${PI_VERSION:?set PI_VERSION in .env}
+        PI_INTEGRITY: ${PI_INTEGRITY:?set PI_INTEGRITY in .env}
+    profiles: ["client"]
+    user: "${PI_UID:-1000}:${PI_GID:-1000}"
+    depends_on:
+      radiance-shim:
+        condition: service_healthy
+    volumes:
+      - ./work:/work
+      - ./run/pi-agent:/agent
+    environment:
+      HOME: /tmp
+      PI_CODING_AGENT_DIR: /agent
+      KRB5CCNAME: FILE:/tmp/does-not-exist
+    working_dir: /work
+    networks: [shim-net]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
+    stdin_open: true
+    tty: true
+    command: ["sleep", "infinity"]
+
+  test-runner:
+    image: radiance-krb-tests:local
+    build:
+      context: tests
+      args:
+        TESTS_BASE_IMAGE: ${TESTS_BASE_IMAGE:?set TESTS_BASE_IMAGE in .env}
+    profiles: ["test"]
+    # Owns run/ccache, run/pi-agent and the Compose secret files (mode 0600).
+    user: "${PI_UID:-1000}:${PI_GID:-1000}"
+    depends_on:
+      ipa:
+        condition: service_healthy
+      radiance-edge:
+        condition: service_healthy
+    working_dir: /tests
+    environment:
+      HOME: /tmp
+      EDGE_URL: https://radiance.ipa.test:8443
+      IPA_HOST: ipa.ipa.test
+      REALM: IPA.TEST
+      KRB5_CONFIG: /etc/krb5.conf
+      KRB5CCNAME: FILE:/creds/krb5cc
+      REQUESTS_CA_BUNDLE: /certs/ca.crt
+      SSL_CERT_FILE: /certs/ca.crt
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONPATH: /tests
+    volumes:
+      - ./tests:/tests:ro
+      - ./deploy:/deploy:ro
+      - ./compose.yaml:/compose.yaml:ro
+      - ./.env.example:/.env.example:ro
+      - ./scripts:/scripts:ro
+      - ./run/ccache:/creds
+      - ./run/pi-agent:/agent:ro
+      - ./run/krb5.conf:/etc/krb5.conf:ro
+      - ./run/ipa-data/certs/ca.crt:/certs/ca.crt:ro
+    secrets:
+      - pi_password
+      - mallory_password
+      - ipa_admin_password
+    networks: [krb-net]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]

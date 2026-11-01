@@ -1,0 +1,122 @@
+ServerTokens Prod
+ServerSignature Off
+TraceEnable Off
+KeepAliveTimeout 5
+Timeout 600
+ProxyTimeout 3600
+LimitRequestFields 50
+MaxRequestWorkers 128
+# 32 threads x 4 servers = 128, so Apache does not warn or round down.
+ThreadsPerChild 32
+ServerName radiance.ipa.test
+
+# mod_ldap's cache/trust directives are SERVER-SCOPE ONLY. They must not be
+# placed inside <VirtualHost> or <LocationMatch>; httpd refuses to start.
+LDAPTrustedGlobalCert CA_BASE64 /run/radiance/ca.crt
+LDAPVerifyServerCert On
+LDAPCacheTTL 60
+LDAPCacheEntries 1024
+# Group membership is cached by the *operation* cache; its default is 600 s.
+LDAPOpCacheTTL 60
+LDAPOpCacheEntries 1024
+
+Listen 8443 https
+
+<VirtualHost *:8443>
+    ServerName radiance.ipa.test
+    SSLEngine on
+    SSLProtocol -all +TLSv1.3
+    # TLS 1.3 suites carry the protocol prefix; an unprefixed list of TLS_AES_*
+    # names makes OpenSSL's SSL_CTX_set_cipher_list() fail and mod_ssl exit.
+    SSLCipherSuite TLSv1.3 TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256
+    SSLCompression off
+    SSLSessionTickets off
+    SSLCertificateFile    /certs/radiance.crt
+    SSLCertificateKeyFile /certs/radiance.key
+    SSLCACertificateFile  /certs/ca.crt
+
+    ErrorLog /proc/self/fd/2
+
+    # mod_proxy streams request bodies past LimitRequestBody, so enforce the
+    # declared size in the rewrite phase and reject chunked bodies (no
+    # Content-Length to check).
+    RewriteEngine On
+    RewriteCond %{HTTP:Content-Length} >16777216
+    RewriteRule ^ - [R=413,L]
+    RewriteCond %{HTTP:Transfer-Encoding} ^chunked$ [NC]
+    RewriteRule ^ - [R=411,L]
+
+    Header always set Strict-Transport-Security "max-age=63072000; includeSubDomains"
+    Header always unset X-Powered-By
+    # A client must never be able to inject an identity header.
+    RequestHeader unset X-Radiance-Principal
+    RequestHeader unset X-Forwarded-User
+
+    # Only these operations exist for model users.
+    <LocationMatch "^/v1/(models|chat/completions|completions)$">
+        AuthType GSSAPI
+        AuthName "radiance"
+        GssapiCredStore keytab:/run/radiance/radiance.keytab
+        GssapiAcceptorName HTTP@radiance.ipa.test
+        GssapiSSLonly On
+        GssapiUseSessions Off
+        GssapiBasicAuth Off
+        GssapiLocalName On
+        GssapiPublishMech On
+        GssapiNegotiateOnce On
+
+        # Live IPA LDAP group check over LDAPS. The LDAP cache/trust
+        # directives above are server-scope; only AuthLDAP* lives here.
+        AuthLDAPURL "ldaps://ipa.ipa.test:636/cn=users,cn=accounts,dc=ipa,dc=test?uid?sub?(objectClass=posixAccount)"
+        AuthLDAPBindDN "uid=svc-radiance,cn=sysaccounts,cn=etc,dc=ipa,dc=test"
+        AuthLDAPBindPassword "{{LDAP_BIND_PASSWORD}}"
+        AuthLDAPGroupAttribute member
+        AuthLDAPGroupAttributeIsDN On
+
+        # ONE top-level RequireAll containing every requirement. Apache merges
+        # multiple sibling Require directives (and containers) with RequireAny
+        # semantics, so a sibling "Require method" would grant unauthenticated
+        # GET/POST requests even with this container present (verified live).
+        <RequireAll>
+            Require method GET POST
+            Require valid-user
+            Require ldap-group CN=ai-users,CN=groups,CN=accounts,DC=ipa,DC=test
+        </RequireAll>
+        # An authenticated principal outside ai-users is a 403, not another
+        # 401 challenge loop.
+        AuthzSendForbiddenOnFailure On
+
+        LimitRequestBody 16777216
+    </LocationMatch>
+
+    # Everything not expressly allowed is denied before any handler runs.
+    <LocationMatch "^/(?!v1/(models|chat/completions|completions)$)">
+        Require all denied
+    </LocationMatch>
+
+    ProxyRequests Off
+    ProxyPreserveHost Off
+    SSLProxyEngine Off
+    # Exact-path proxy: no prefix match, so no unauthenticated path can reach
+    # the engine. The same regex is used by the authenticated LocationMatch.
+    ProxyPassMatch "^/v1/(models|chat/completions|completions)$" "http://127.0.0.1:8000/v1/$1"
+
+    RequestHeader set Authorization "Bearer {{RADIANCE_API_KEY}}"
+    RequestHeader set X-Radiance-Principal "%{GSS_NAME}e"
+    RequestHeader set Host "127.0.0.1:8000"
+
+    LogFormat "{\"ts\":\"%{%FT%TZ}t\",\"principal\":\"%{GSS_NAME}e\",\"uid\":\"%u\",\"mech\":\"%{GSS_MECH}e\",\"status\":%>s,\"bytes\":%B,\"dur_us\":%D,\"tls\":\"%{SSL_PROTOCOL}x\",\"cipher\":\"%{SSL_CIPHER}x\"}" json_audit
+    CustomLog /proc/self/fd/1 json_audit
+</VirtualHost>
+
+# Loopback-only health, not published. The edge reports config/keytab/cert
+# readiness only; it deliberately does not depend on the engine.
+Listen 127.0.0.1:8081
+<VirtualHost 127.0.0.1:8081>
+    ServerName radiance-edge-health
+    DocumentRoot /var/www/health
+    ErrorLog /proc/self/fd/2
+    <Location "/healthz">
+        Require all granted
+    </Location>
+</VirtualHost>

@@ -1,0 +1,78 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 9 * * 6"
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install pytest==9.2.0 PyYAML==6.0.3
+      - run: python -m pytest -q tests/unit
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - run: python -m compileall -q deploy scripts tests
+      - name: shell syntax
+        run: find scripts deploy -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
+      - name: shellcheck
+        run: >-
+          shellcheck --severity=error
+          scripts/*.sh deploy/edge/entrypoint.sh
+          deploy/ipa/bootstrap.sh deploy/radiance/entrypoint.sh
+
+  compose-config:
+    name: compose config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose --env-file .env.example config -q
+
+  edge-check:
+    name: apachectl -t
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make edge-check
+
+  integration-fast:
+    name: FreeIPA + edge + mock integration
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env
+      - name: match the runner UID
+        run: |
+          uid="$(id -u)"; gid="$(id -g)"
+          sed -i "s/^PI_UID=.*/PI_UID=$uid/; s/^PI_GID=.*/PI_GID=$gid/; \
+                  s/^RADIANCE_UID=.*/RADIANCE_UID=$uid/; s/^RADIANCE_GID=.*/RADIANCE_GID=$gid/" .env
+      - run: ./scripts/up.sh
+      - run: make test-fast
+      - name: logs on failure
+        if: failure()
+        run: docker compose --env-file .env --profile test-fast logs --tail=200
+      - name: teardown
+        if: always()
+        run: ./scripts/down.sh
