@@ -1,8 +1,8 @@
 # radiance service
 
-The real engine runs only in the `gpu` profile. It shares the edge's network
-namespace (`network_mode: service:radiance-edge`), binds `127.0.0.1:8000` and
-publishes no port. The edge injects the private API key on the loopback hop.
+The real engine runs only in the `gpu` profile. It shares the gateway's network
+namespace (`network_mode: service:radiance-gateway`), binds `127.0.0.1:8000` and
+publishes no port. The gateway injects the private API key on the loopback hop.
 
 - `entrypoint.sh` reads `secrets/radiance_api_key` (0400 `${RADIANCE_UID}`),
   exports `RADIANCE_API_KEY`, and execs the image's own `radiance` binary.

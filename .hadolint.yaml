@@ -1,0 +1,14 @@
+# Debian packages are pinned by the digest-pinned base image; individual apt
+# versions are deliberately not pinned (a security rebuild must be able to pull
+# the archive's current package). Image CVEs are scanned in CI instead.
+#
+#  DL3006  FROM uses ${GATEWAY_BASE_IMAGE} etc., which is digest-pinned in .env.
+#  DL3016  the Pi tarball is installed from a verified local path, not a loose
+#          npm range.
+#  SC2016  the single quotes are deliberate: they are written into a script.
+ignored:
+  - DL3006
+  - DL3008
+  - DL3016
+  - DL3018
+  - SC2016

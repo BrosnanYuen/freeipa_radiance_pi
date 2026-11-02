@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(os.environ.get("REPO_ROOT", Path(__file__).resolve().parents[1]))
-for rel in ("deploy/pi", "deploy/edge", "deploy/ipa", "scripts"):
+for rel in ("deploy/pi", "deploy/gateway", "deploy/edge", "deploy/ipa", "scripts"):
     candidate = ROOT / rel
     if candidate.is_dir():
         sys.path.insert(0, str(candidate))

@@ -1,3 +1,7 @@
+> **Legacy:** this Apache edge is no longer in `compose.yaml`. The
+> running front door is [../gateway](../gateway/README.md). The files remain
+> as a reference for the earlier `mod_auth_gssapi` implementation.
+
 # radiance edge
 
 Apache httpd with `mod_auth_gssapi`, TLS 1.3, and a live FreeIPA LDAP group

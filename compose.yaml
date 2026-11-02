@@ -86,12 +86,14 @@ services:
     cap_add: [DAC_OVERRIDE, CHOWN, FOWNER]
     security_opt: ["no-new-privileges:true"]
 
-  radiance-edge:
-    image: radiance-krb-edge:local
+  # Kerberos/TLS front door. radiance runs in this service's network
+  # namespace, so the engine is loopback-only and the gateway injects its key.
+  radiance-gateway:
+    image: radiance-krb-gateway:local
     build:
-      context: deploy/edge
+      context: deploy/gateway
       args:
-        EDGE_BASE_IMAGE: ${EDGE_BASE_IMAGE:?set EDGE_BASE_IMAGE in .env}
+        GATEWAY_BASE_IMAGE: ${GATEWAY_BASE_IMAGE:?set GATEWAY_BASE_IMAGE in .env}
     hostname: radiance.ipa.test
     restart: unless-stopped
     depends_on:
@@ -110,19 +112,13 @@ services:
         aliases:
           - radiance.ipa.test
     environment:
-      # Apache workers run as www-data; the default replay-cache directory
-      # /var/tmp is read-only in this container.
-      KRB5RCACHEDIR: /tmp
-      # OpenLDAP reads these even when mod_ldap's LDAPTrustedGlobalCert is set;
-      # without them the Debian client fell back to the system CA bundle and
-      # every LDAPS/StartTLS bind failed.
-      LDAPTLS_CACERT: /run/radiance/ca.crt
-      LDAPTLS_REQCERT: demand
+      KRB5_CONFIG: /etc/krb5.conf
+      KRB5RCACHEDIR: /tmp/gateway
     cap_drop: [ALL]
     cap_add: [CHOWN, FOWNER, SETGID, SETUID, DAC_OVERRIDE]
     security_opt: ["no-new-privileges:true"]
     read_only: true
-    tmpfs: [/run, /tmp, /var/lock]
+    tmpfs: [/run, /tmp]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8081/healthz >/dev/null"]
       interval: 10s
@@ -130,14 +126,14 @@ services:
       retries: 120
       start_period: 10m
 
-  # Real engine. Shares the edge's network namespace and loopback; publishes
+  # Real engine. Shares the gateway's network namespace and loopback; publishes
   # nothing. gpu and test-fast are mutually exclusive.
   radiance:
     image: ${RADIANCE_IMAGE:?pin a radiance image digest in .env}
     profiles: ["gpu"]
-    network_mode: "service:radiance-edge"
+    network_mode: "service:radiance-gateway"
     depends_on:
-      radiance-edge:
+      radiance-gateway:
         condition: service_healthy
     init: true
     user: "${RADIANCE_UID:?set RADIANCE_UID in .env}:${RADIANCE_GID:?set RADIANCE_GID in .env}"
@@ -175,7 +171,7 @@ services:
       - --tp
       - "1"
       - --max-model-len
-      - "${RADIANCE_CONTEXT_WINDOW:-200000}"
+      - "${RADIANCE_CONTEXT_WINDOW:?set RADIANCE_CONTEXT_WINDOW (E0 measurement)}"
       - --kv-cache-dtype
       - fp8
       - --max-num-seqs
@@ -194,7 +190,7 @@ services:
       retries: 5
       start_period: 15m
 
-  # OpenAI-compatible stub sharing the edge namespace. Requires no GPU.
+  # OpenAI-compatible stub sharing the gateway namespace. Requires no GPU.
   mock-radiance:
     image: radiance-krb-mock:local
     build:
@@ -202,9 +198,9 @@ services:
       args:
         TESTS_BASE_IMAGE: ${TESTS_BASE_IMAGE:?set TESTS_BASE_IMAGE in .env}
     profiles: ["test-fast"]
-    network_mode: "service:radiance-edge"
+    network_mode: "service:radiance-gateway"
     depends_on:
-      radiance-edge:
+      radiance-gateway:
         condition: service_healthy
     read_only: true
     tmpfs: [/tmp]
@@ -260,7 +256,7 @@ services:
     profiles: ["client"]
     user: "${PI_UID:-1000}:${PI_GID:-1000}"
     depends_on:
-      radiance-edge:
+      radiance-gateway:
         condition: service_healthy
     volumes:
       - ./run/ccache:/creds
@@ -339,7 +335,7 @@ services:
     depends_on:
       ipa:
         condition: service_healthy
-      radiance-edge:
+      radiance-gateway:
         condition: service_healthy
     working_dir: /tests
     environment:

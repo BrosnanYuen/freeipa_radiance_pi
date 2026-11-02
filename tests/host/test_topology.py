@@ -43,7 +43,7 @@ def test_radiance_has_no_published_port(compose) -> None:
 
 
 def test_edge_publishes_only_8443_on_loopback(compose) -> None:
-    data = inspect(compose, "radiance-edge")
+    data = inspect(compose, "radiance-gateway")
     ports = data["NetworkSettings"].get("Ports") or {}
     published = {key for key, values in ports.items() if values}
     assert published == {"8443/tcp"}
@@ -56,11 +56,11 @@ def test_edge_publishes_only_8443_on_loopback(compose) -> None:
 def test_keytab_permissions(compose) -> None:
     proc = exec_in(
         compose,
-        "radiance-edge",
-        ["stat", "-c", "%a %U:%G", "/run/radiance/radiance.keytab"],
+        "radiance-gateway",
+        ["stat", "-c", "%a %U:%G", "/run/gateway/radiance.keytab"],
     )
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == "400 www-data:www-data"
+    assert proc.stdout.strip() == "400 gateway:gateway"
 
 
 def test_pi_client_can_only_reach_the_shim(compose) -> None:
@@ -74,7 +74,7 @@ def test_pi_client_can_only_reach_the_shim(compose) -> None:
 
     for url in (
         "http://ipa.ipa.test:88",
-        "https://radiance-edge:8443/v1/models",
+        "https://radiance-gateway:8443/v1/models",
         "https://radiance.ipa.test:8443/v1/models",
     ):
         blocked = exec_in(
@@ -98,7 +98,7 @@ def test_agent_has_no_kerberos_configuration(compose) -> None:
 
 
 def test_edge_capabilities(compose) -> None:
-    data = inspect(compose, "radiance-edge")
+    data = inspect(compose, "radiance-gateway")
     caps = set(data["HostConfig"]["CapDrop"])
     assert "ALL" in caps
     assert data["HostConfig"]["ReadonlyRootfs"] is True

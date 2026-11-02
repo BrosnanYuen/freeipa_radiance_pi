@@ -1,0 +1,11 @@
+[Unit]
+Description=Rotate the radiance edge Kerberos keytab
+Documentation=file://@REPO_DIR@/docs/SECRETS.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=@REPO_DIR@
+ExecStart=@REPO_DIR@/scripts/rotate-keytab.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

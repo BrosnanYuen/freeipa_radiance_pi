@@ -79,8 +79,12 @@ def test_env_example_has_no_secret_values(repo_root: Path) -> None:
             assert value.strip() == "", key
 
 
-def test_rendered_edge_config_is_not_in_template(repo_root: Path) -> None:
-    template = (repo_root / "deploy/edge/vhost.conf.tmpl").read_text()
-    assert "AuthLDAPBindPassword \"{{LDAP_BIND_PASSWORD}}\"" in template
-    assert "RequestHeader set Authorization \"Bearer {{RADIANCE_API_KEY}}\"" in template
-    assert "0123456789abcdef" not in template
+def test_gateway_reads_secrets_from_files(repo_root: Path) -> None:
+    text = (repo_root / "deploy/gateway/gateway.py").read_text()
+    # The key and bind password are read from files, never embedded in the
+    # source or passed on the command line.
+    assert "api_key_file" in text
+    assert "ldap_bind_password_file" in text
+    assert "0123456789abcdef" not in text
+    assert "X-Radiance-Principal" in text
+    assert "ALLOWED_PATHS" in text

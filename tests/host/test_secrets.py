@@ -43,7 +43,7 @@ def test_container_argv_and_env_carry_no_secrets(compose) -> None:
     assert secrets
     for service in (
         "ipa",
-        "radiance-edge",
+        "radiance-gateway",
         "radiance-shim",
         "pi-login",
         "pi-client",

@@ -1,0 +1,8 @@
+# DS-0002 (no non-root USER in the Dockerfile) is accepted because:
+#  * deploy/edge starts as root, installs the keytab as www-data, then Apache
+#    drops its workers to www-data; the master must bind 8443 and read the
+#    root-owned TLS key at startup;
+#  * deploy/pi and tests images are always run with an explicit non-root
+#    `user:` in compose.yaml (PI_UID:PI_GID), and pi-client additionally drops
+#    all capabilities and has a read-only root filesystem.
+DS-0002

@@ -148,6 +148,8 @@ def test_up_sh_invariants() -> None:
     assert "RADIANCE_SECCOMP" in up
     assert "realpath -m" in up
     assert "render_install_options.py" in up
+    assert "check_model_licenses.py" in up
+    assert "render_env.py" in up
 
 
 def test_down_sh_profiles() -> None:
@@ -160,10 +162,42 @@ def test_rotate_keytab_script() -> None:
     text = (SCRIPTS / "rotate-keytab.sh").read_text()
     assert "ipa-getkeytab" in text
     assert "-p HTTP/radiance.ipa.test" in text
-    assert "restart radiance-edge" in text
+    assert "recreate_gateway_stack" in text
+
+
+def test_rotation_scripts_exist_and_avoid_argv_secrets() -> None:
+    for name in (
+        "rotate-admin-password.sh",
+        "rotate-dm-password.sh",
+        "rotate-ldap-bind-password.sh",
+        "rotate-api-key.sh",
+        "rotate-cert.sh",
+    ):
+        path = SCRIPTS / name
+        assert path.is_file(), name
+        assert path.stat().st_mode & 0o111, name
+        text = path.read_text()
+        assert ". \"$(dirname \"$0\")/lib.sh\"" in text, name
+        # The password is deliberately passed on stdin, never as an argument.
+        assert "--password-file" not in text
 
 
 def test_makefile_targets() -> None:
     makefile = (ROOT / "Makefile").read_text()
-    for target in ("unit", "config", "edge-check", "up", "test-fast", "test-host"):
+    for target in (
+        "unit",
+        "config",
+        "edge-check",
+        "up",
+        "up-gpu",
+        "smoke",
+        "test-fast",
+        "test-host",
+        "test-rotation",
+        "license-check",
+        "reset",
+        "env",
+        "host-pi",
+        "backup-ipa",
+    ):
         assert f"{target}:" in makefile

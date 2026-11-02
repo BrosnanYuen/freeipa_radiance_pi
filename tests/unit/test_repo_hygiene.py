@@ -109,7 +109,7 @@ def test_no_latest_tags_in_env_or_compose() -> None:
 
 def test_shell_scripts_are_executable() -> None:
     for path in list((ROOT / "scripts").glob("*.sh")) + [
-        ROOT / "deploy/edge/entrypoint.sh",
+        ROOT / "deploy/gateway/entrypoint.sh",
         ROOT / "deploy/ipa/bootstrap.sh",
         ROOT / "deploy/radiance/entrypoint.sh",
     ]:
@@ -119,7 +119,14 @@ def test_shell_scripts_are_executable() -> None:
 def test_docs_exist() -> None:
     for name in ("README.md", "PLAN.md", "RESEARCH.md", "LICENSE"):
         assert (ROOT / name).is_file(), name
-    for name in ("RUNBOOK.md", "THREAT-MODEL.md", "CAPACITY.md", "DEVIATIONS.md"):
+    for name in (
+        "RUNBOOK.md",
+        "THREAT-MODEL.md",
+        "CAPACITY.md",
+        "DEVIATIONS.md",
+        "SECRETS.md",
+        "MODEL-LICENSES.md",
+    ):
         path = ROOT / "docs" / name
         assert path.is_file(), name
         assert path.stat().st_size > 500, name
@@ -134,6 +141,8 @@ def test_ci_workflow_exists() -> None:
     text = path.read_text(encoding="utf-8")
     assert "pytest" in text
     assert "docker compose" in text
+    for scanner in ("gitleaks", "trivy", "yamllint", "hadolint", "syft"):
+        assert scanner in text, scanner
 
 
 def test_no_runtime_or_secret_paths_tracked() -> None:

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Bring up the radiance-krb stack.
 #
-#   ./scripts/up.sh          IPA + edge + mock radiance + shim  (no GPU needed)
-#   ./scripts/up.sh --gpu    IPA + edge + real radiance  + shim
+#   ./scripts/up.sh          IPA + gateway + mock radiance + shim  (no GPU needed)
+#   ./scripts/up.sh --gpu    IPA + gateway + real radiance  + shim
 #
 # Idempotent: secrets, the key/CSR and the runtime directories are created only
 # when missing; the realm is installed by the FreeIPA image on first start.
@@ -31,8 +31,9 @@ command -v openssl >/dev/null || die "openssl is required"
 command -v python3 >/dev/null || die "python3 is required"
 
 if [ ! -f .env ]; then
-    cp .env.example .env
-    log "created .env from .env.example — review UIDs/GIDs and RADIANCE_MODELS"
+    python3 scripts/render_env.py --source .env.example --out .env ||
+        die "could not create .env"
+    log "created .env with this host's UID/GIDs — review RADIANCE_MODELS and the image pins"
 fi
 set -a
 # shellcheck disable=SC1091
@@ -51,6 +52,16 @@ set +a
 RADIANCE_SECCOMP="$(realpath -m "$RADIANCE_SECCOMP")"
 export RADIANCE_SECCOMP
 [ -f "$RADIANCE_SECCOMP" ] || die "seccomp profile not found: $RADIANCE_SECCOMP"
+
+# Fail fast: the licence decision must exist before the long IPA install, not
+# only before the engine starts. See docs/MODEL-LICENSES.md.
+if [ "$MODE" = "gpu" ]; then
+    python3 scripts/check_model_licenses.py --models-dir "$RADIANCE_MODELS" ||
+        die "model licence gate failed (see docs/MODEL-LICENSES.md)"
+    if [ "${CAPACITY_MEASURED:-0}" != "1" ]; then
+        die "CAPACITY_MEASURED is not 1: run the E0 procedure in docs/CAPACITY.md, set RADIANCE_CONTEXT_WINDOW to the measured ctx_max, then set CAPACITY_MEASURED=1"
+    fi
+fi
 
 COMPOSE=(docker compose --env-file .env)
 
@@ -160,9 +171,9 @@ fi
 log "running the one-off IPA bootstrap"
 "${COMPOSE[@]}" --profile bootstrap run --rm -T bootstrap
 
-log "starting the Kerberos edge"
-"${COMPOSE[@]}" up -d radiance-edge
-wait_healthy radiance-edge 900
+log "starting the Kerberos gateway"
+"${COMPOSE[@]}" up -d radiance-gateway
+wait_healthy radiance-gateway 900
 
 if [ "$MODE" = "gpu" ]; then
     log "starting radiance (GPU); this can take a while to load the model"
@@ -186,5 +197,6 @@ Stack is up. Next:
   docker compose --profile client run --rm pi-login pi-krb status
   docker compose --profile client run --rm pi-client pi-krb run --model radiance-krb/qwen3.8-27b
 
-For a host-run Pi, see docs/RUNBOOK.md (the container path is the tested one).
+For a host-run Pi, run `make host-pi` (pinned Pi via npx + a loopback shim);
+the pure host-install variant is documented in docs/RUNBOOK.md §3.
 EOF

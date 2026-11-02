@@ -4,7 +4,7 @@
 No third-party dependencies: the test image installs nothing beyond Python.
 Implements /health, /v1/models, /v1/chat/completions (SSE and non-streaming,
 including a tool call) and /v1/completions. It also echoes the principal the
-edge injected as X-Mock-Principal so tests can prove header injection.
+gateway injected as X-Mock-Principal so tests can prove header injection.
 """
 
 from __future__ import annotations

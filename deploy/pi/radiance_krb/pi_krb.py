@@ -30,7 +30,7 @@ AES_PREFIXES = ("aes256-cts-hmac-sha1-96", "aes128-cts-hmac-sha1-96",
 ENCTYPE_RE = re.compile(r"Etype \(skey, tkt\):\s*(.+)$", re.MULTILINE)
 PRINCIPAL_RE = re.compile(r"^[A-Za-z0-9._@/-]+$")
 DEFAULT_MODEL = "radiance-krb/qwen3.8-27b"
-DEFAULT_CONTEXT = 200_000
+DEFAULT_CONTEXT = 32_768
 
 
 class PiKrbError(RuntimeError):

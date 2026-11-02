@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly rotation of the radiance edge keytab
+Documentation=file://@REPO_DIR@/docs/SECRETS.md
+
+[Timer]
+OnCalendar=Mon 04:17
+AccuracySec=1h
+RandomizedDelaySec=30m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

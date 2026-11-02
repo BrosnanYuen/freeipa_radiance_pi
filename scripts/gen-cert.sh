@@ -34,6 +34,18 @@ else
     fi
 fi
 
-chmod 600 "$KEY"
-chmod 644 "$CSR"
+# The IPA data volume is root-owned after the realm exists, and a rotated TLS
+# key is written by the bootstrap container as root. chmod on a file this user
+# does not own fails, even when the mode is already correct; only tighten files
+# we own (or when running as root).
+if [ -O "$KEY" ] || [ "$(id -u)" = "0" ]; then
+    chmod 600 "$KEY"
+else
+    echo "gen-cert: $KEY is not owned by this user; leaving its mode unchanged" >&2
+fi
+if [ -O "$CSR" ] || [ "$(id -u)" = "0" ]; then
+    chmod 644 "$CSR"
+else
+    echo "gen-cert: $CSR is not owned by this user; leaving its mode unchanged" >&2
+fi
 echo "gen-cert: key and CSR ready for $SERVER_NAME" >&2

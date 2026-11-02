@@ -1,0 +1,14 @@
+[extend]
+useDefault = true
+
+# Test fixtures use obvious placeholder values, and run/ holds the live realm.
+# Neither is part of a CI checkout, but a local scan must not drown in noise.
+[allowlist]
+description = "repository fixtures and gitignored runtime state"
+paths = [
+  '''tests/''',
+  '''run/''',
+  '''secrets/''',
+  '''work/''',
+  '''\.gitleaks\.toml''',
+]

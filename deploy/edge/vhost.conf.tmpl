@@ -4,6 +4,9 @@ TraceEnable Off
 KeepAliveTimeout 5
 Timeout 600
 ProxyTimeout 3600
+# Bound slow-header and slow-body clients explicitly rather than inheriting the
+# distro default. T17 asserts a partial header is closed/408 within this window.
+RequestReadTimeout header=10-20,MinRate=500 body=10,MinRate=500
 LimitRequestFields 50
 MaxRequestWorkers 128
 # 32 threads x 4 servers = 128, so Apache does not warn or round down.
@@ -113,7 +116,7 @@ Listen 8443 https
 # readiness only; it deliberately does not depend on the engine.
 Listen 127.0.0.1:8081
 <VirtualHost 127.0.0.1:8081>
-    ServerName radiance-edge-health
+    ServerName radiance-gateway-health
     DocumentRoot /var/www/health
     ErrorLog /proc/self/fd/2
     <Location "/healthz">

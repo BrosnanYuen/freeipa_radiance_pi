@@ -35,6 +35,7 @@ def test_tls13_only_and_cipher_prefix(vhost: str) -> None:
     assert "SSLCompression off" in vhost
     assert "SSLSessionTickets off" in vhost
     assert "ProxyTimeout 3600" in vhost
+    assert "RequestReadTimeout header=10-20,MinRate=500 body=10,MinRate=500" in vhost
     assert "RewriteCond %{HTTP:Content-Length} >16777216" in vhost
     assert "RewriteRule ^ - [R=413,L]" in vhost
     assert "RewriteCond %{HTTP:Transfer-Encoding} ^chunked$ [NC]" in vhost
@@ -209,7 +210,7 @@ def test_entrypoint_invariants() -> None:
 
 def test_dockerfile_modules_and_pins() -> None:
     dockerfile = (EDGE / "Dockerfile").read_text(encoding="utf-8")
-    assert "ARG EDGE_BASE_IMAGE" in dockerfile
+    assert "ARG GATEWAY_BASE_IMAGE" in dockerfile
     for module in ("auth_gssapi", "ssl", "headers", "proxy_http", "ldap", "authnz_ldap", "rewrite"):
         assert module in dockerfile
     assert "IncludeOptional /run/apache2/radiance.conf" in dockerfile

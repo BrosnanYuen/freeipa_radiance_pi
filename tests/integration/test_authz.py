@@ -8,10 +8,10 @@ pytestmark = pytest.mark.integration
 
 def test_t14_engine_has_no_network_route() -> None:
     for host, port in (
-        ("radiance-edge", 8000),
+        ("radiance-gateway", 8000),
         ("radiance", 8000),
         ("mock-radiance", 8000),
-        ("radiance-edge", 8081),
+        ("radiance-gateway", 8081),
     ):
         with pytest.raises(OSError):
             socket.create_connection((host, port), timeout=2).close()

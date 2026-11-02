@@ -556,7 +556,7 @@ pi --print "List the files in this directory" --model radiance/qwen3.8-27b
 |---|---|---|---|
 | **A. Shared key + network isolation** | radiance `--api-key`, bound to loopback or a private interface, TLS proxy in front; key distributed via IPA vault/secret store | Simplest; matches radiance's design | One key for everyone; rotation is all-or-nothing; no attribution |
 | **B. OIDC gateway** | Keycloak federated with FreeIPA (LDAP/Kerberos user store) issues tokens; `oauth2-proxy` or an API gateway validates them and injects radiance's key upstream | Real SSO, per-user audit, group-based authorisation | Extra component to operate; two identity systems to keep consistent |
-| **C. Per-user keys via `!command`** | Pi `apiKey: "!ipa-token-helper"` or `"!op read …"`; helper returns a short-lived token from a gateway or vault, keyed to the IPA identity | No long-lived secret on disk; per-user attribution at the gateway | Requires the helper + issuer; Pi caches command output for the process lifetime |
+| **C. Per-user keys via `!command`** | Pi `apiKey: "!ipa-token-helper"` or `"!op read …"`; helper returns a short-lived token from a gateway or vault, keyed to the IPA identity | No long-lived secret on disk; per-user attribution at the gateway | Requires the helper + issuer; model-config commands resolve per request (see §14.4), while `auth.json` commands are cached |
 | **D. Per-team instances** | Separate radiance instances/ports per team or project, each with its own key and model set | Blast-radius isolation; simple | VRAM-hungry; operational overhead |
 
 For most teams, **A now, B later**: ship with loopback/TLS-proxy isolation and a vaulted key, then add Keycloak when multi-user attribution or quotas become requirements. Option C is the cleanest long-term fit with Pi's `!command` credential support, but it needs a token issuer that does not exist in this stack yet.
@@ -710,7 +710,7 @@ Sequencing: **E1 → E2 → E3** proves the core value with no identity work. **
 **Not verified by execution** (no clone/build/run was performed):
 
 - That radiance builds on this machine (no AMD GPU assumed; ROCm not checked).
-- That the sample `models.json` produces a working Pi session — the field names and semantics are from the reference, but the combination is untested. Treat §6.2 as a starting point and expect one or two compat flags to be needed.
+- ~~That the sample `models.json` produces a working Pi session~~ — verified on 2026-11-01 for Pi 1.4.0 against the mock engine, both in the container and from the host through the loopback shim (see §14.6). Real-model tool-calling remains untested.
 - Tool-calling behaviour of any specific container.
 - That FreeIPA installs cleanly on the target OS, and that `ipa-getcert`/HBAC commands match the target version's syntax (they are standard but version-sensitive).
 - Gateway integration (Keycloak + FreeIPA + `oauth2-proxy`) — entirely design-stage.
@@ -833,3 +833,15 @@ CLI details verified in source:
 
 The plan in [PLAN.md](PLAN.md) reflects these corrections: edge enforcement with an endpoint allowlist, host-side IPA bootstrap via `docker compose exec`, shim-first Pi integration, `--api-key-env`/`--no-cors`/`--served-model-name`/`--mm-max-patches 0`, and a measured 200k capacity gate with `fp8_v4`/`k6_v4` rather than streaming KV.
 
+
+### 14.6 Post-implementation verification (2026-11-01)
+
+| Fact | Result |
+|---|---|
+| Pi npm pin | `@earendil-works/pi-coding-agent@1.4.0` is still the latest release and its npm integrity matches the image pin. No upgrade available, so the transitive-dependency scanner findings are upstream (THREAT-MODEL RR10). |
+| Host-mode Pi | Pinned Pi 1.4.0 run from the host via `npx` completed ten `--continue` turns through a loopback-published shim (`scripts/host-pi-smoke.sh`). Pi's global config and `/etc/hosts` were not modified. |
+| Container Pi | The container suite (login, print, JSON mode, three continued turns) passes against the mock engine. |
+| Apache/OpenSSL | The pinned edge image runs Apache 2.4.68 and OpenSSL 3.0.22; `apachectl -t` passes and two requests are served over TLS 1.3 only. |
+| Rotation | Admin, Directory Manager, LDAP bind, engine API key, keytab and TLS key/cert rotations were exercised against the live realm. Two findings changed the implementation: `ipa user-mod --password` expires the password and must be followed by an expiry clear; and FreeIPA's 1-hour `minlife` blocks immediate re-rotation unless the policy is briefly relaxed. |
+| Scanner findings | Gitleaks, yamllint, hadolint and trivy-config are clean with the repository configs. Trivy reports no fixable CRITICAL in the edge/Pi/test/mock images; the Pi image has HIGH transitive npm findings recorded in RR10. |
+| Capacity | Measured on 2026-11-01: 197,952-token admission on one R9700, M = 1.0, cold TTFT 145.4 s, 1,361.8 tok/s prefill, 23.8 tok/s decode, 20.58 GiB peak. T11b: fp8_v4 3/3 retrieval, exact outputs vs fp8, mean top-5 KL 0.00017 nats. |

@@ -126,11 +126,13 @@ def test_p2_json_mode(compose) -> None:
 
 
 def test_p3_no_credential_prompt_after_login(compose) -> None:
-    for turn in range(3):
+    for turn in range(10):
+        args = ["--print", f"turn {turn}"]
+        if turn > 0:
+            args.append("--continue")
         proc = _pi(
             compose,
-            "--print",
-            f"turn {turn}",
+            *args,
             "--model",
             "radiance-krb/qwen3.8-27b",
         )

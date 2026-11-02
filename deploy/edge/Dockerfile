@@ -1,5 +1,5 @@
-ARG EDGE_BASE_IMAGE=debian:bookworm-slim
-FROM ${EDGE_BASE_IMAGE}
+ARG GATEWAY_BASE_IMAGE=debian:bookworm-slim
+FROM ${GATEWAY_BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive \
     APACHE_RUN_DIR=/run/apache2 \
@@ -19,7 +19,7 @@ RUN apt-get update \
       python3-minimal \
       openssl \
  && rm -rf /var/lib/apt/lists/* \
- && a2enmod ssl headers proxy proxy_http ldap authnz_ldap auth_gssapi rewrite \
+ && a2enmod ssl headers proxy proxy_http ldap authnz_ldap auth_gssapi rewrite reqtimeout \
  && rm -f /etc/apache2/sites-enabled/000-default.conf \
  && printf '# Ports are declared in /run/apache2/radiance.conf\n' > /etc/apache2/ports.conf \
  && printf 'IncludeOptional /run/apache2/radiance.conf\n' > /etc/apache2/conf-enabled/zz-radiance.conf \

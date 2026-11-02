@@ -39,7 +39,7 @@ def test_expected_services(compose_config: dict) -> None:
     assert set(compose_config["services"]) == {
         "ipa",
         "bootstrap",
-        "radiance-edge",
+        "radiance-gateway",
         "radiance",
         "mock-radiance",
         "pi-login",
@@ -56,7 +56,7 @@ def test_image_pins(compose_config: dict) -> None:
     for name in (
         "FREEIPA_IMAGE",
         "RADIANCE_IMAGE",
-        "EDGE_BASE_IMAGE",
+        "GATEWAY_BASE_IMAGE",
         "PI_BASE_IMAGE",
         "TESTS_BASE_IMAGE",
     ):
@@ -70,17 +70,17 @@ def test_image_pins(compose_config: dict) -> None:
 
 
 def test_edge_and_engine_topology(compose_config: dict) -> None:
-    edge = _service(compose_config, "radiance-edge")
+    edge = _service(compose_config, "radiance-gateway")
     engine = _service(compose_config, "radiance")
     mock = _service(compose_config, "mock-radiance")
     assert _ports(edge) == ["${BIND_ADDR:-127.0.0.1}:8443:8443"]
-    assert engine["network_mode"] == "service:radiance-edge"
-    assert mock["network_mode"] == "service:radiance-edge"
+    assert engine["network_mode"] == "service:radiance-gateway"
+    assert mock["network_mode"] == "service:radiance-gateway"
     assert "ports" not in engine
     assert "ports" not in mock
     assert engine["profiles"] == ["gpu"]
     assert mock["profiles"] == ["test-fast"]
-    assert engine["depends_on"]["radiance-edge"]["condition"] == "service_healthy"
+    assert engine["depends_on"]["radiance-gateway"]["condition"] == "service_healthy"
     assert engine["security_opt"] == [
         "no-new-privileges:true",
         "seccomp=${RADIANCE_SECCOMP:?set RADIANCE_SECCOMP in .env}",
@@ -149,7 +149,7 @@ def test_secret_scoping(compose_config: dict) -> None:
         "mallory_password",
         "ipa_admin_password",
     }
-    edge = _service(compose_config, "radiance-edge")
+    edge = _service(compose_config, "radiance-gateway")
     assert any("/secrets-src/ldap_bind_password" in v for v in _volumes(edge))
     assert any("/secrets-src/radiance_api_key" in v for v in _volumes(edge))
 
@@ -164,7 +164,7 @@ def test_no_docker_socket_or_privileged(compose_config: dict) -> None:
 def test_hardening(compose_config: dict) -> None:
     for name in (
         "bootstrap",
-        "radiance-edge",
+        "radiance-gateway",
         "radiance",
         "mock-radiance",
         "pi-login",
@@ -175,7 +175,7 @@ def test_hardening(compose_config: dict) -> None:
         service = _service(compose_config, name)
         assert service["cap_drop"] == ["ALL"], name
         assert "no-new-privileges:true" in service["security_opt"], name
-    for name in ("radiance-edge", "radiance", "mock-radiance", "pi-login", "radiance-shim", "pi-client"):
+    for name in ("radiance-gateway", "radiance", "mock-radiance", "pi-login", "radiance-shim", "pi-client"):
         assert _service(compose_config, name).get("read_only") is True, name
 
 
@@ -199,7 +199,7 @@ def test_engine_flags_single_source(compose_config: dict) -> None:
     assert flags["--host"] == "127.0.0.1"
     assert flags["--port"] == "8000"
     assert flags["--api-key-env"] == "RADIANCE_API_KEY"
-    assert flags["--max-model-len"] == "${RADIANCE_CONTEXT_WINDOW:-200000}"
+    assert flags["--max-model-len"] == "${RADIANCE_CONTEXT_WINDOW:?set RADIANCE_CONTEXT_WINDOW (E0 measurement)}"
     assert flags["--mm-max-patches"] == "0"
     assert flags["--num-speculative-tokens"] == "0"
     assert flags["--kv-cache-dtype"] == "fp8"
@@ -229,7 +229,7 @@ def test_seccomp_profile_is_present_and_pinned() -> None:
 
 
 def test_edge_healthcheck_is_independent_of_engine(compose_config: dict) -> None:
-    edge = _service(compose_config, "radiance-edge")
+    edge = _service(compose_config, "radiance-gateway")
     command = " ".join(str(item) for item in edge["healthcheck"]["test"])
     assert "8081/healthz" in command
     assert "8000" not in command
@@ -265,3 +265,14 @@ def test_bootstrap_uses_no_run_tmpfs(compose_config: dict) -> None:
     # Compose secrets live under /run/secrets; a /run tmpfs would hide them.
     bootstrap = _service(compose_config, "bootstrap")
     assert "/run" not in bootstrap.get("tmpfs", [])
+
+
+def test_capacity_gate_is_fail_closed(repo_root: Path) -> None:
+    env = (repo_root / ".env.example").read_text(encoding="utf-8")
+    assert "RADIANCE_CONTEXT_WINDOW=32768" in env
+    assert "CAPACITY_MEASURED=0" in env
+    up = (repo_root / "scripts/up.sh").read_text(encoding="utf-8")
+    assert "CAPACITY_MEASURED" in up
+    assert "E0 procedure" in up
+    compose = (repo_root / "compose.yaml").read_text(encoding="utf-8")
+    assert "${RADIANCE_CONTEXT_WINDOW:?" in compose

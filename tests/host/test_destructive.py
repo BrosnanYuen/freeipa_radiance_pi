@@ -101,7 +101,7 @@ def _restart_edge_mock() -> None:
             "up",
             "-d",
             "--force-recreate",
-            "radiance-edge",
+            "radiance-gateway",
             "mock-radiance",
         ],
         check=False,
@@ -109,7 +109,7 @@ def _restart_edge_mock() -> None:
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         proc = run(
-            ["docker", "compose", "--env-file", ".env", "exec", "-T", "radiance-edge", "curl", "-fsS", "http://127.0.0.1:8081/healthz"],
+            ["docker", "compose", "--env-file", ".env", "exec", "-T", "radiance-gateway", "curl", "-fsS", "http://127.0.0.1:8081/healthz"],
             check=False,
         )
         if proc.returncode == 0:
